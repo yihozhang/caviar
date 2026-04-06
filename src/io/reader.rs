@@ -99,6 +99,32 @@ pub fn get_runner_params(start: usize) -> Result<(usize, usize, f64), Box<dyn Er
     return Ok((iter, nodes, time));
 }
 
+/// Reads expressions from a CSV file that has only two columns: `ID` and `Expression`
+/// (no Halide columns).  Used by `sto_prove` and other commands that work with
+/// files that do not carry Halide baseline data.
+#[allow(dead_code)]
+pub fn read_expressions_simple(
+    file_path: &OsString,
+) -> Result<Vec<ExpressionStruct>, Box<dyn Error>> {
+    let mut expressions_vect = Vec::new();
+    let file = File::open(file_path)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_reader(file);
+    for result in rdr.records() {
+        let record = result?;
+        let index: i32 = record[0].parse::<i32>().unwrap();
+        let expression = record[1].to_string();
+        expressions_vect.push(ExpressionStruct::new(
+            index,
+            expression,
+            String::new(),
+            0.0,
+        ));
+    }
+    Ok(expressions_vect)
+}
+
 ///Reads the start and end expressions from the exprs file in the tmp folder (used for quick testing)
 pub fn get_start_end() -> Result<(String, String), Box<dyn Error>> {
     let mut file = File::open("./tmp/exprs.txt")?;

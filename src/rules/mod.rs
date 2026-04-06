@@ -11,4 +11,5 @@ pub mod modulo;
 pub mod mul;
 pub mod not;
 pub mod or;
+pub mod sto_rules;
 pub mod sub;

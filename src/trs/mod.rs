@@ -42,23 +42,19 @@ pub struct ConstantFold;
 impl Analysis<Math> for ConstantFold {
     type Data = Option<i64>;
 
-    fn merge(&self, a: &mut Self::Data, b: Self::Data) -> Option<Ordering> {
+    fn merge(&mut self, a: &mut Self::Data, b: Self::Data) -> DidMerge {
         match (a.as_mut(), &b) {
-            (None, None) => Some(Ordering::Equal),
+            (None, None) => DidMerge(false, false),
             (None, Some(_)) => {
                 *a = b;
-                Some(Ordering::Less)
+                DidMerge(true, false)
             }
-            (Some(_), None) => Some(Ordering::Greater),
-            (Some(_), Some(_)) => Some(Ordering::Equal),
+            (Some(_), None) => DidMerge(false, true),
+            (Some(_), Some(_)) => DidMerge(false, false),
         }
-        // if a.is_none() && b.is_some() {
-        //     *a = b
-        // }
-        // cmp
     }
 
-    fn make(egraph: &EGraph, enode: &Math) -> Self::Data {
+    fn make(egraph: &mut EGraph, enode: &Math, _id: Id) -> Self::Data {
         let x = |i: &Id| egraph[*i].data.as_ref();
         Some(match enode {
             Math::Constant(c) => (*c),
@@ -144,11 +140,11 @@ impl Analysis<Math> for ConstantFold {
     }
 
     fn modify(egraph: &mut EGraph, id: Id) {
-        let class = &mut egraph[id];
-        if let Some(c) = class.data.clone() {
-            let added = egraph.add(Math::Constant(c.clone()));
-            let (id, _did_something) = egraph.union(id, added);
+        if let Some(c) = egraph[id].data.clone() {
+            let added = egraph.add(Math::Constant(c));
+            egraph.union(id, added);
             // to not prune, comment this out
+            let id = egraph.find(id);
             egraph[id].nodes.retain(|n| n.is_leaf());
 
             assert!(
@@ -280,7 +276,7 @@ pub fn filtered_rules(class: &json::JsonValue) -> Result<Vec<Rewrite>, Box<dyn E
     ]
     .concat();
     let rules_iter = all_rules.into_iter();
-    let rules = rules_iter.filter(|rule| class.contains(rule.name()));
+    let rules = rules_iter.filter(|rule| class.contains(rule.name.as_str()));
     return Ok(rules.collect());
 }
 
@@ -1641,6 +1637,142 @@ pub fn prove_npp(
         runner.iterations.iter().map(|i| i.n_rebuilds).sum(),
         total_time,
         stop_reason,
+        None,
+    )
+}
+
+/// Prove an expression to `0` or `1` using stochastic (Metropolis-Hastings)
+/// rewriting.
+///
+/// Spawns one thread per logical CPU core.  Each thread runs an independent
+/// Metropolis-Hastings chain with a different random seed and beta value.
+/// A cost of **0** is assigned to the constants `0` and `1` (the proof goals),
+/// so any thread that rewrites the expression to a boolean constant will have
+/// `best_cost == 0`.  The function returns once the timeout elapses and
+/// combines results from all threads.
+///
+/// # Arguments
+/// * `index` – expression index (pass -1 if not applicable).
+/// * `start_expression` – the s-expression to prove.
+/// * `timeout_secs` – wall-clock budget in seconds.
+/// * `report` – whether to print progress to stdout.
+pub fn sto_prove(
+    index: i32,
+    start_expression: &str,
+    timeout_secs: f64,
+    report: bool,
+) -> ResultStructure {
+    use egg::stochastic::{PeriodicBeta, SimpleLcg, StoPhase, StoRunner};
+    use crate::rules::sto_rules::{all_sto_rules, StoConstantFold};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let start: RecExpr<Math> = start_expression.parse().unwrap();
+    let timeout = Duration::from_secs_f64(timeout_secs);
+    let wall_start = Instant::now();
+
+    let n_threads = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(1);
+
+    if report {
+        println!(
+            "\n====================================\nSto-Proving Expression ({} threads):\n {}\n",
+            n_threads, start_expression
+        );
+    }
+
+    let initial_expr = Arc::new(start);
+
+    let handles: Vec<_> = (0..n_threads)
+        .map(|i| {
+            let initial_expr = Arc::clone(&initial_expr);
+            let seed = 42u64 + i as u64;
+            // Spread beta values across [0.2, 2.0] so threads explore different
+            // temperature regimes.
+            let beta = 0.2 + 1.8 * (i as f64) / (n_threads as f64).max(1.0);
+            std::thread::spawn(move || {
+                let rules = all_sto_rules();
+                let mut runner = StoRunner::new_with_analysis(
+                    (*initial_expr).clone(),
+                    rules,
+                    StoConstantFold,
+                );
+                let phases = vec![
+                    // Warm-up: pure AST-size cost to diversify starting points.
+                    StoPhase {
+                        max_iter: 200,
+                        max_stall: usize::MAX,
+                        beta_schedule: Box::new(PeriodicBeta {
+                            random_walk_steps: 10,
+                            beta,
+                            interval: 50,
+                        }),
+                        record_best: false,
+                        cost_fn: Some(Arc::new(|enode: &Math, _data, cc: &[f64]| {
+                            1.0 + enode.fold(0.0, |s, c| s + cc[usize::from(c)])
+                        })),
+                    },
+                    // Main phase: proving cost (0 for constants 0/1).
+                    StoPhase {
+                        max_iter: usize::MAX,
+                        max_stall: 5_000,
+                        beta_schedule: Box::new(PeriodicBeta {
+                            random_walk_steps: 10,
+                            beta,
+                            interval: 100,
+                        }),
+                        record_best: true,
+                        cost_fn: None,
+                    },
+                ];
+                let mut rng = SimpleLcg::new(seed);
+                runner.run_phased(&phases, usize::MAX, timeout, &mut rng);
+                (runner.best_expr, runner.best_cost, runner.step_count)
+            })
+        })
+        .collect();
+
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let total_steps: u64 = results.iter().map(|(_, _, s)| s).sum();
+    let (best_expr, best_cost, _) = results
+        .into_iter()
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+        .unwrap();
+
+    let total_time = wall_start.elapsed().as_secs_f64();
+    // Cost 0 means the expression was simplified to 0 or 1.
+    let result = best_cost == 0.0;
+    let best_expr_str = best_expr.to_string();
+
+    if report {
+        if result {
+            println!("Proved: {}", best_expr_str);
+        } else {
+            println!("Could not prove (best: {})", best_expr_str);
+        }
+        println!(
+            "Steps: {}  Time: {:.3}s",
+            total_steps, total_time
+        );
+    }
+
+    ResultStructure::new(
+        index,
+        start_expression.to_string(),
+        "1/0".to_string(),
+        result,
+        best_expr_str,
+        -1,
+        0,
+        0,
+        0,
+        total_time,
+        if result {
+            "Proved".to_string()
+        } else {
+            format!("Timeout ({:.1}s)", timeout_secs)
+        },
         None,
     )
 }

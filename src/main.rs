@@ -1,11 +1,15 @@
 use std::{env, ffi::OsString, fs::File, io::Read, time::Instant};
 
-use io::reader::{get_nth_arg, get_runner_params, get_start_end, read_expressions};
+use io::reader::{
+    get_nth_arg, get_runner_params, get_start_end, read_expressions, read_expressions_simple,
+};
 use io::writer::write_results;
 use json::parse;
 use std::time::Duration;
 use structs::{ExpressionStruct, ResultStructure};
-use trs::{prove, prove_expression_with_file_classes, prove_npp, prove_pulses, prove_pulses_npp};
+use trs::{
+    prove, prove_expression_with_file_classes, prove_npp, prove_pulses, prove_pulses_npp, sto_prove,
+};
 
 use crate::io::reader::read_expressions_paper;
 use crate::io::writer::write_results_paper;
@@ -322,8 +326,8 @@ fn main() {
             }
             // Prove expressions using Caviar with/without ILC
             "prove" => {
-                let expression_vect = read_expressions(&expressions_file).unwrap();
-                let results = prove_expressions(&expression_vect, -1, params, true, false);
+                let expression_vect = read_expressions_simple(&expressions_file).unwrap();
+                let results = prove_expressions(&expression_vect, -1, params, true, true);
                 write_results("tmp/results_prove.csv", &results).unwrap();
             }
             // Prove expressions using Caviar with pulses and with/without ILC.
@@ -336,13 +340,13 @@ fn main() {
                     .unwrap();
                 let expression_vect = read_expressions(&expressions_file).unwrap();
                 let results =
-                    prove_expressions_pulses(&expression_vect, -1, threshold, params, true, false);
+                    prove_expressions_pulses(&expression_vect, -1, threshold, params, true, true);
                 write_results(&format!("tmp/results_beh_{}.csv", threshold), &results).unwrap();
             }
             // Prove expressions using Caviar with NPP and with/without ILC.
             "npp" => {
                 let expression_vect = read_expressions(&expressions_file).unwrap();
-                let results = prove_expressions_npp(&expression_vect, -1, params, true, false);
+                let results = prove_expressions_npp(&expression_vect, -1, params, true, true);
                 write_results(&format!("tmp/results_fast.csv"), &results).unwrap();
             }
             // Prove expressions using Caviar with Pulses and NPP and with pulses and with/without ILC.
@@ -387,6 +391,26 @@ fn main() {
                 let expression_vect = read_expressions(&expressions_file).unwrap();
                 let results = simplify_expressions(&expression_vect, -1, params, true);
                 write_results("tmp/results_simplify.csv", &results).unwrap();
+            }
+            // Prove expressions using stochastic Metropolis-Hastings search with all CPU cores.
+            // Usage: cargo run --release -- sto_prove <expressions_file> <timeout_secs> 0 0
+            // The first runner param is treated as the timeout in seconds.
+            "sto_prove" => {
+                // Use the simple 2-column reader (ID, Expression); falls back to the full
+                // 4-column reader if the simple one fails.
+                let expression_vect = read_expressions_simple(&expressions_file)
+                    .or_else(|_| read_expressions(&expressions_file))
+                    .unwrap();
+                let timeout_secs = params.0 as f64; // first param = timeout in seconds
+                let mut results = Vec::new();
+                for expression in expression_vect.iter() {
+                    println!("Starting Expression: {}", expression.index);
+                    let mut res =
+                        sto_prove(expression.index, &expression.expression, timeout_secs, true);
+                    res.add_halide(expression.halide_result.clone(), expression.halide_time);
+                    results.push(res);
+                }
+                write_results("tmp/results_sto_prove.csv", &results).unwrap();
             }
             _ => {}
         }

@@ -97,7 +97,7 @@ pub fn minimal_set_to_prove(
         ruleset_copy_names = ruleset_minimal
             .clone()
             .into_iter()
-            .map(|rule| rule.name().to_string())
+            .map(|rule| rule.name.to_string())
             .rev()
             .collect();
         data_object = object! {
@@ -232,7 +232,7 @@ pub fn minimal_set_to_prove_0_1(
         ruleset_copy_names = ruleset_minimal
             .clone()
             .into_iter()
-            .map(|rule| rule.name().to_string())
+            .map(|rule| rule.name.to_string())
             .rev()
             .collect();
         data_object = object! {
