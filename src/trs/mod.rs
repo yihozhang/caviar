@@ -1662,8 +1662,8 @@ pub fn sto_prove(
     timeout_secs: f64,
     report: bool,
 ) -> ResultStructure {
-    use egg::stochastic::{PeriodicBeta, SimpleLcg, StoPhase, StoRunner};
     use crate::rules::sto_rules::{all_sto_rules, StoConstantFold};
+    use egg::stochastic::{PeriodicBeta, SimpleLcg, StoPhase, StoRunner};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -1693,26 +1693,23 @@ pub fn sto_prove(
             let beta = 0.2 + 1.8 * (i as f64) / (n_threads as f64).max(1.0);
             std::thread::spawn(move || {
                 let rules = all_sto_rules();
-                let mut runner = StoRunner::new_with_analysis(
-                    (*initial_expr).clone(),
-                    rules,
-                    StoConstantFold,
-                );
+                let mut runner =
+                    StoRunner::new_with_analysis((*initial_expr).clone(), rules, StoConstantFold);
                 let phases = vec![
                     // Warm-up: pure AST-size cost to diversify starting points.
-                    StoPhase {
-                        max_iter: 200,
-                        max_stall: usize::MAX,
-                        beta_schedule: Box::new(PeriodicBeta {
-                            random_walk_steps: 10,
-                            beta,
-                            interval: 50,
-                        }),
-                        record_best: false,
-                        cost_fn: Some(Arc::new(|enode: &Math, _data, cc: &[f64]| {
-                            1.0 + enode.fold(0.0, |s, c| s + cc[usize::from(c)])
-                        })),
-                    },
+                    // StoPhase {
+                    //     max_iter: 200,
+                    //     max_stall: usize::MAX,
+                    //     beta_schedule: Box::new(PeriodicBeta {
+                    //         random_walk_steps: 10,
+                    //         beta,
+                    //         interval: 50,
+                    //     }),
+                    //     record_best: false,
+                    //     cost_fn: Some(Arc::new(|enode: &Math, _data, cc: &[f64]| {
+                    //         1.0 + enode.fold(0.0, |s, c| s + cc[usize::from(c)])
+                    //     })),
+                    // },
                     // Main phase: proving cost (0 for constants 0/1).
                     StoPhase {
                         max_iter: usize::MAX,
@@ -1751,10 +1748,7 @@ pub fn sto_prove(
         } else {
             println!("Could not prove (best: {})", best_expr_str);
         }
-        println!(
-            "Steps: {}  Time: {:.3}s",
-            total_steps, total_time
-        );
+        println!("Steps: {}  Time: {:.3}s", total_steps, total_time);
     }
 
     ResultStructure::new(
