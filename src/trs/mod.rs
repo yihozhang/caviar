@@ -1,3 +1,4 @@
+use egg::stochastic::StoConfig;
 use json::JsonValue;
 use std::error::Error;
 use std::time::Duration;
@@ -1690,49 +1691,36 @@ pub fn sto_prove(
             let seed = 42u64 + i as u64;
             // Spread beta values across [0.2, 2.0] so threads explore different
             // temperature regimes.
-            let beta = 0.2 + 1.8 * (i as f64) / (n_threads as f64).max(1.0);
+            // let beta = 0.2 + 1.8 * (i as f64) / (n_threads as f64).max(1.0);
+            let beta = 1.0;
+            // let beta = 1. + 0.4 * (if i < n_threads / 2 { 1. } else { -1. });
             std::thread::spawn(move || {
                 let rules = all_sto_rules();
                 let mut runner =
                     StoRunner::new_with_analysis((*initial_expr).clone(), rules, StoConstantFold);
-                let phases = vec![
-                    // Warm-up: pure AST-size cost to diversify starting points.
-                    // StoPhase {
-                    //     max_iter: 200,
-                    //     max_stall: usize::MAX,
-                    //     beta_schedule: Box::new(PeriodicBeta {
-                    //         random_walk_steps: 10,
-                    //         beta,
-                    //         interval: 50,
-                    //     }),
-                    //     record_best: false,
-                    //     cost_fn: Some(Arc::new(|enode: &Math, _data, cc: &[f64]| {
-                    //         1.0 + enode.fold(0.0, |s, c| s + cc[usize::from(c)])
-                    //     })),
-                    // },
-                    // Main phase: proving cost (0 for constants 0/1).
-                    StoPhase {
+                let mut rng = SimpleLcg::new(seed);
+                runner.run(
+                    StoConfig {
+                        max_stall: 10_000,
+                        max_restart: usize::MAX,
                         max_iter: usize::MAX,
-                        max_stall: 5_000,
+                        max_time: timeout,
                         beta_schedule: Box::new(PeriodicBeta {
                             random_walk_steps: 10,
                             beta,
                             interval: 100,
                         }),
-                        record_best: true,
-                        cost_fn: None,
                     },
-                ];
-                let mut rng = SimpleLcg::new(seed);
-                runner.run_phased(&phases, usize::MAX, timeout, &mut rng);
-                (runner.best_expr, runner.best_cost, runner.step_count)
+                    &mut rng,
+                );
+                (runner.best_expr, runner.best_cost, runner.step_count, beta)
             })
         })
         .collect();
 
     let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-    let total_steps: u64 = results.iter().map(|(_, _, s)| s).sum();
-    let (best_expr, best_cost, _) = results
+    let total_steps: u64 = results.iter().map(|(_, _, s, _)| s).sum();
+    let (best_expr, best_cost, _, beta) = results
         .into_iter()
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
         .unwrap();
@@ -1748,7 +1736,10 @@ pub fn sto_prove(
         } else {
             println!("Could not prove (best: {})", best_expr_str);
         }
-        println!("Steps: {}  Time: {:.3}s", total_steps, total_time);
+        // println!(
+        //     "Steps: {}  Time: {:.3}s beta: {:.2}",
+        //     total_steps, total_time, beta
+        // );
     }
 
     ResultStructure::new(

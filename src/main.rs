@@ -3,7 +3,7 @@ use std::{env, ffi::OsString, fs::File, io::Read, time::Instant};
 use io::reader::{
     get_nth_arg, get_runner_params, get_start_end, read_expressions, read_expressions_simple,
 };
-use io::writer::write_results;
+use io::writer::{append_result, append_result_paper, create_writer, write_results};
 use json::parse;
 use std::time::Duration;
 use structs::{ExpressionStruct, ResultStructure};
@@ -30,11 +30,11 @@ fn prove_expressions(
     params: (usize, usize, f64),
     use_iteration_check: bool,
     report: bool,
+    output_path: &str,
 ) -> Vec<ResultStructure> {
-    //Initialize the results vector.
     let mut results = Vec::new();
+    let mut wtr = create_writer(output_path).unwrap();
 
-    //For each expression try to prove it then push the results into the results vector.
     for expression in exprs_vect.iter() {
         println!("Starting Expression: {}", expression.index);
         let mut res = prove(
@@ -46,6 +46,7 @@ fn prove_expressions(
             report,
         );
         res.add_halide(expression.halide_result.clone(), expression.halide_time);
+        append_result(&mut wtr, &res).unwrap();
         results.push(res);
     }
     results
@@ -60,10 +61,10 @@ fn prove_expressions_pulses(
     params: (usize, usize, f64),
     use_iteration_check: bool,
     report: bool,
+    output_path: &str,
 ) -> Vec<ResultStructure> {
-    //Initialize the results vector.
     let mut results = Vec::new();
-    //For each expression try to prove it using Caviar with Pulses then push the results into the results vector.
+    let mut wtr = create_writer(output_path).unwrap();
     for expression in exprs_vect.iter() {
         println!("Starting Expression: {}", expression.index);
         let mut res = prove_pulses(
@@ -76,6 +77,7 @@ fn prove_expressions_pulses(
             report,
         );
         res.add_halide(expression.halide_result.clone(), expression.halide_time);
+        append_result(&mut wtr, &res).unwrap();
         results.push(res);
     }
     results
@@ -89,11 +91,11 @@ fn prove_expressions_npp(
     params: (usize, usize, f64),
     use_iteration_check: bool,
     report: bool,
+    output_path: &str,
 ) -> Vec<ResultStructure> {
-    //Initialize the results vector.
     let mut results = Vec::new();
+    let mut wtr = create_writer(output_path).unwrap();
 
-    //For each expression try to prove it using Caviar with NPP then push the results into the results vector.
     for expression in exprs_vect.iter() {
         println!("Starting Expression: {}", expression.index);
         let mut res = prove_npp(
@@ -105,6 +107,7 @@ fn prove_expressions_npp(
             report,
         );
         res.add_halide(expression.halide_result.clone(), expression.halide_time);
+        append_result(&mut wtr, &res).unwrap();
         results.push(res);
     }
     results
@@ -119,10 +122,10 @@ fn prove_expressions_pulses_npp_paper(
     params: (usize, usize, f64),
     use_iteration_check: bool,
     report: bool,
+    output_path: &str,
 ) -> Vec<PaperResult> {
-    //Initialize the results vector.
     let mut results = Vec::new();
-    // For each expression try to prove it using Caviar with Pulses and NPP then push the results into the results vector.
+    let mut wtr = create_writer(output_path).unwrap();
     for expression in exprs_vect.iter() {
         println!("Starting Expression: {}", expression.0);
         let res = prove_pulses_npp(
@@ -134,12 +137,13 @@ fn prove_expressions_pulses_npp_paper(
             use_iteration_check,
             report,
         );
-        // res.add_halide(expression.halide_result, expression.halide_time);
-        results.push(PaperResult::new(
+        let paper_result = PaperResult::new(
             expression.0.clone(),
             expression.1.clone(),
             if res.result { 1 } else { 0 },
-        ));
+        );
+        append_result_paper(&mut wtr, &paper_result).unwrap();
+        results.push(paper_result);
     }
     results
 }
@@ -153,13 +157,13 @@ fn prove_expressions_pulses_npp(
     params: (usize, usize, f64),
     use_iteration_check: bool,
     report: bool,
+    output_path: &str,
 ) -> Vec<ResultStructure> {
-    //Initialize the results vector.
     let mut results = Vec::new();
-    // For each expression try to prove it using Caviar with Pulses and NPP then push the results into the results vector.
+    let mut wtr = create_writer(output_path).unwrap();
     for expression in exprs_vect.iter() {
         println!("Starting Expression: {}", expression.index);
-        results.push(prove_pulses_npp(
+        let res = prove_pulses_npp(
             expression.index,
             &expression.expression,
             ruleset_class,
@@ -167,7 +171,9 @@ fn prove_expressions_pulses_npp(
             params,
             use_iteration_check,
             report,
-        ));
+        );
+        append_result(&mut wtr, &res).unwrap();
+        results.push(res);
     }
     results
 }
@@ -258,11 +264,11 @@ fn simplify_expressions(
     ruleset_class: i8,
     params: (usize, usize, f64),
     report: bool,
+    output_path: &str,
 ) -> Vec<ResultStructure> {
-    //Initialize the results vector.
     let mut results = Vec::new();
+    let mut wtr = create_writer(output_path).unwrap();
 
-    //For each expression try to prove it then push the results into the results vector.
     for expression in exprs_vect.iter() {
         println!("Starting Expression: {}", expression.index);
         let mut res = simplify(
@@ -273,6 +279,7 @@ fn simplify_expressions(
             report,
         );
         res.add_halide(expression.halide_result.clone(), expression.halide_time);
+        append_result(&mut wtr, &res).unwrap();
         results.push(res);
     }
     results
@@ -327,8 +334,7 @@ fn main() {
             // Prove expressions using Caviar with/without ILC
             "prove" => {
                 let expression_vect = read_expressions_simple(&expressions_file).unwrap();
-                let results = prove_expressions(&expression_vect, -1, params, true, true);
-                write_results("tmp/results_prove.csv", &results).unwrap();
+                prove_expressions(&expression_vect, -1, params, true, true, "tmp/results_prove.csv");
             }
             // Prove expressions using Caviar with pulses and with/without ILC.
             "pulses" => {
@@ -339,15 +345,13 @@ fn main() {
                     .parse::<f64>()
                     .unwrap();
                 let expression_vect = read_expressions(&expressions_file).unwrap();
-                let results =
-                    prove_expressions_pulses(&expression_vect, -1, threshold, params, true, true);
-                write_results(&format!("tmp/results_beh_{}.csv", threshold), &results).unwrap();
+                let path = format!("tmp/results_beh_{}.csv", threshold);
+                prove_expressions_pulses(&expression_vect, -1, threshold, params, true, true, &path);
             }
             // Prove expressions using Caviar with NPP and with/without ILC.
             "npp" => {
                 let expression_vect = read_expressions(&expressions_file).unwrap();
-                let results = prove_expressions_npp(&expression_vect, -1, params, true, true);
-                write_results(&format!("tmp/results_fast.csv"), &results).unwrap();
+                prove_expressions_npp(&expression_vect, -1, params, true, true, "tmp/results_fast.csv");
             }
             // Prove expressions using Caviar with Pulses and NPP and with pulses and with/without ILC.
             "pulses_npp" => {
@@ -358,15 +362,8 @@ fn main() {
                     .parse::<f64>()
                     .unwrap();
                 let expression_vect = read_expressions(&expressions_file).unwrap();
-                let results = prove_expressions_pulses_npp(
-                    &expression_vect,
-                    -1,
-                    threshold,
-                    params,
-                    true,
-                    false,
-                );
-                write_results(&format!("tmp/results_beh_npp_{}.csv", threshold), &results).unwrap();
+                let path = format!("tmp/results_beh_npp_{}.csv", threshold);
+                prove_expressions_pulses_npp(&expression_vect, -1, threshold, params, true, false, &path);
             }
             // Prove expressions using Caviar with clusters of rules and with pulses and with/without ILC.
             "clusters" => {
@@ -389,8 +386,7 @@ fn main() {
             }
             "simplify" => {
                 let expression_vect = read_expressions(&expressions_file).unwrap();
-                let results = simplify_expressions(&expression_vect, -1, params, true);
-                write_results("tmp/results_simplify.csv", &results).unwrap();
+                simplify_expressions(&expression_vect, -1, params, true, "tmp/results_simplify.csv");
             }
             // Prove expressions using stochastic Metropolis-Hastings search with all CPU cores.
             // Usage: cargo run --release -- sto_prove <expressions_file> <timeout_secs> 0 0
@@ -402,15 +398,14 @@ fn main() {
                     .or_else(|_| read_expressions(&expressions_file))
                     .unwrap();
                 let timeout_secs = params.0 as f64; // first param = timeout in seconds
-                let mut results = Vec::new();
+                let mut wtr = create_writer("tmp/results_sto_prove.csv").unwrap();
                 for expression in expression_vect.iter() {
                     println!("Starting Expression: {}", expression.index);
                     let mut res =
                         sto_prove(expression.index, &expression.expression, timeout_secs, true);
                     res.add_halide(expression.halide_result.clone(), expression.halide_time);
-                    results.push(res);
+                    append_result(&mut wtr, &res).unwrap();
                 }
-                write_results("tmp/results_sto_prove.csv", &results).unwrap();
             }
             _ => {}
         }
